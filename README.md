@@ -17,8 +17,9 @@ Documentation de la configuration de mon VPS hébergeant [ewengadonnaud.xyz](htt
 - Changement du port par défaut
 - Configuration fail2ban
 
-### 2. Firewall (UFW/iptables)
-[Vos règles]
+### 2. Filtrage Web
+- Différentes "Jails" fail2ban présentes pour contrer les attaques
+- Configuration renforcée de NGINX
 
 ### 3. Certificats SSL
 - Let's Encrypt avec renouvellement automatique
