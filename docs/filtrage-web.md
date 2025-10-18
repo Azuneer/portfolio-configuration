@@ -35,51 +35,282 @@ C'est la règle la plus critique pour protéger l'accès administratif au serveu
 | **sshd** | Anti-brute force SSH | `Journaux systemd (journalctl)` | **Explication :** Un attaquant va tenter de se connecter en SSH en essayant des combinaisons classiques (comme `root/password`, `admin/123456`, `user/user`). Cette jail compte les échecs. Après 3 ou 5 échecs, l'IP est bannie pour plusieurs heures.<br>• **Impact : 419 bannissements sur 31 298 tentatives !** |
 
 ---
+# 🚀 Architecture de Sécurité & Performance NGINX
 
-## 🚀 NGINX : Configuration Web Renforcée
+Cette configuration transforme NGINX en un véritable **pare-feu applicatif (WAF)** et un **serveur de cache** haute performance, en plus de son rôle de serveur web.
 
-NGINX sert de pare-feu applicatif (WAF) de première ligne et d'outil d'optimisation.
+---
 
-### 🔒 Sécurité SSL/HTTPS & Protocoles
+## 🚦 Section 1 : Redirection HTTP vers HTTPS (Le "Vigile")
 
-* **Redirection Forcée** : Tout le trafic `http://` est redirigé en `https://` (code `301`).
-    > **Pourquoi ?** Si un utilisateur se connecte depuis un Wi-Fi public (gare, café), une personne malveillante sur le même réseau pourrait intercepter le trafic. Le HTTPS (`httpS`) chiffre la connexion, rendant cette interception impossible.
+L'intégralité du trafic non sécurisé (port 80) est immédiatement et définitivement redirigée vers sa contrepartie sécurisée (port 443). C'est la première ligne de défense et une "best practice" absolue.
 
-* **Certificats Let's Encrypt** : Gestion automatisée des certificats SSL (via `certbot`).
+```nginx
+# Redirection HTTP → HTTPS
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ewengadonnaud.xyz www.ewengadonnaud.xyz;
+    return 301 https://$server_name$request_uri;
+}
+```
 
-* **HTTP/2** : Protocole activé pour améliorer la vitesse de chargement (permet au navigateur de télécharger plusieurs fichiers en parallèle sur une seule connexion).
+### Explication
 
-* **Discrétion** (`server_tokens off;`) :
-    > **Exemple :** Par défaut, NGINX répond `Server: nginx/1.22.0`. Cela donne des informations à un attaquant. Avec `server_tokens off;`, il répond simplement `Server: nginx`, cachant la version exacte (et donc les failles connues de cette version).
+* **`listen 80;` et `listen [::]:80;`** : Ouvre le port 80 pour les connexions IPv4 et IPv6. Sans cela, les utilisateurs tapant `http://...` recevraient une erreur "connexion refusée".
 
-### 🛡️ Protection contre les Attaques
+* **`return 301 ...`** : C'est la directive la plus importante. Elle envoie un code "Moved Permanently" (Déplacé Définitivement).
+  * **Pour le SEO** : C'est la méthode la plus propre. Elle dit à Google et aux autres moteurs de recherche que la seule version "officielle" (canonique) du site est en `https://`.
+  * **Pour l'utilisateur** : Le navigateur se souviendra de ce choix et tentera d'utiliser `https://` directement lors des prochaines visites.
 
-* **Limitation de Débit (Rate Limiting)**
-    * Une zone `general` est définie, autorisant des pics courts (`burst=20`).
-    > **Analogie :** C'est un "videur" à l'entrée. Il laisse entrer les gens à un rythme normal. Si un groupe de 20 (`burst`) arrive, il les laisse passer. Mais si un bus de 200 personnes arrive d'un coup (attaque DoS), il leur dit d'attendre et ne les laisse entrer qu'au compte-gouttes, protégeant le serveur.
+* **`$server_name$request_uri;`** : Ces variables NGINX assurent que la redirection est parfaite.
+  * `$server_name` reprend le domaine demandé (ex: `www.ewengadonnaud.xyz`).
+  * `$request_uri` reprend le chemin complet (ex: `/un-projet.html`).
+  * **Résultat** : `http://.../page` redirige bien vers `https://.../page` et non vers la page d'accueil.
 
-* **Filtrage des Méthodes HTTP**
-    * Seules les méthodes `GET`, `HEAD`, et `POST` sont autorisées.
-    > **Pourquoi ?** Un navigateur a seulement besoin de `GET` (voir la page) ou `POST` (envoyer un formulaire). Des méthodes comme `DELETE` ou `PUT` n'ont rien à faire sur un portfolio et sont souvent utilisées par des attaquants.
-    * Les autres méthodes sont rejetées avec un code `444` (Connexion fermée).
-    > **Explication :** Un code `403 Forbidden` dit à l'attaquant "Non, tu n'as pas le droit". Un code `444` lui raccroche au nez sans rien dire. C'est plus efficace pour décourager les scanners.
+---
 
-* **Blocage de Chemins Sensibles**
-    * Les requêtes vers des chemins sensibles sont bloquées (code `444`).
-    > **Exemple critique :** Bloquer `/.git/`. Si ce dossier était accidentellement exposé, un attaquant pourrait télécharger tout le code source du site, y compris d'éventuels secrets (clés d'API, etc.).
+## 🔒 Section 2 : Configuration HTTPS Principale (Le "Fort")
 
-* **Blocage d'IPs Manuelles**
-    * Une liste de 10 IPs (identifiées comme attaquants récurrents) est bannie "en dur" dans NGINX, en complément de Fail2ban.
+C'est le cœur du réacteur. Ce bloc écoute sur le port 443, gère le déchiffrement SSL/TLS et sert le contenu du site.
 
-### ⚡ Optimisation des Performances
+```nginx
+# Configuration HTTPS principale
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name ewengadonnaud.xyz www.ewengadonnaud.xyz;
+    
+    root /var/www/mon-portfolio;
+    index index.html;
+    
+    # --- SSL Certificates ---
+    # Les chemins vers les certificats (ssl_certificate) 
+    # et la clé privée (ssl_certificate_key) sont ici.
+    # Ils sont gérés par Certbot et sont confidentiels.
+    [CONFIDENTIEL]
+    
+    # --- Optimisations & Sécurité de Base ---
+    
+    # Cacher la version Nginx
+    server_tokens off;
+    
+    # Recommandation : HSTS (HTTP Strict Transport Security)
+    # Décommentez la ligne ci-dessous pour un A+ sur SSL Labs
+    # add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
 
-* **Cache Agressif (Cache-Control)**
-    * Images, Polices (`1 an`), CSS/JS (`6 mois`).
-    > **Analogie :** Quand un visiteur charge le site, son navigateur "prend une photo" du logo et des polices. Le serveur lui dit : "Garde ces photos pendant 1 an (`immutable`) et ne me les redemande pas". La prochaine fois qu'il visite, la page se charge instantanément car tout est déjà sur son ordinateur.
+    # ... la suite de la configuration (sécurité, cache...)
+    # est détaillée dans les sections suivantes ...
+    
+# } # <- Le bloc se ferme tout à la fin
+```
 
-* **Optimisation des Logs**
-    * `access_log off;` pour tous les assets statiques (images, fonts, css, js).
-    > **Pourquoi ?** Garder un journal de chaque fois que `logo.png` est chargé est inutile et consomme des ressources (écritures disque). On ne garde les logs que pour les pages HTML, qui sont bien plus importantes à suivre.
+### Explication
+
+* **`listen 443 ssl;`** : Indique à NGINX d'écouter sur le port 443 et d'activer le protocole SSL/TLS pour ce bloc.
+
+* **`http2 on;`** : Active le protocole HTTP/2. C'est une optimisation de performance majeure. Il permet au navigateur de télécharger plusieurs fichiers (images, CSS, JS) en parallèle sur une seule connexion (multiplexage), au lieu d'ouvrir une nouvelle connexion pour chaque fichier (coûteux en temps).
+
+* **`[CONFIDENTIEL]`** : La clé privée (`privkey.key`) est le secret absolu qui garantit votre identité. Elle ne doit JAMAIS être partagée ou versionnée sur Git.
+
+* **`server_tokens off;`** : Une mesure de sécurité simple. Par défaut, NGINX affiche sa version (ex: `Server: nginx/1.22.1`) dans les en-têtes de réponse. Cela informe les attaquants sur les failles de sécurité connues pour cette version. `off` cache cette information.
+  > **Exemple :** Par défaut, NGINX répond `Server: nginx/1.22.0`. Cela donne des informations à un attaquant. Avec `server_tokens off;`, il répond simplement `Server: nginx`, cachant la version exacte (et donc les failles connues de cette version).
+
+* **`add_header Strict-Transport-Security...`** : (Recommandé) C'est la directive HSTS. Elle dit au navigateur : "Pendant 1 an (`max-age`), ne me contacte jamais en HTTP. Ne parle qu'en HTTPS." Cela protège contre les attaques de type "man-in-the-middle".
+  > **Pourquoi ?** Si un utilisateur se connecte depuis un Wi-Fi public (gare, café), une personne malveillante sur le même réseau pourrait intercepter le trafic. Le HTTPS (`httpS`) chiffre la connexion, rendant cette interception impossible.
+
+---
+
+## 🛡️ Section 3 : Pare-feu Applicatif (Défense Active)
+
+C'est ici que NGINX cesse d'être un simple serveur web et devient un bouclier de sécurité actif. C'est une défense en profondeur qui complète fail2ban.
+
+### 3.1. Anti-DoS (Limitation de Débit)
+
+```nginx
+    # Rate limiting
+    limit_req zone=general burst=20 nodelay;
+```
+
+C'est le "videur" à l'entrée. Il protège contre les attaques DoS et les bots de scraping agressifs.
+
+* **`zone=general`** : Utilise une zone mémoire (définie dans `nginx.conf`) pour compter les requêtes par IP.
+* **`burst=20`** : Autorise un "pic" de 20 requêtes. C'est essentiel pour qu'un chargement de page normal (qui peut inclure 15-20 images, scripts, etc.) soit instantané.
+* **`nodelay`** : Dit à NGINX de servir les 20 requêtes du "burst" immédiatement, sans les retarder. Toute requête au-delà du "burst" sera mise en attente (ou rejetée), protégeant le serveur.
+
+> **Analogie :** C'est un "videur" à l'entrée. Il laisse entrer les gens à un rythme normal. Si un groupe de 20 (`burst`) arrive, il les laisse passer. Mais si un bus de 200 personnes arrive d'un coup (attaque DoS), il leur dit d'attendre et ne les laisse entrer qu'au compte-gouttes, protégeant le serveur.
+
+### 3.2. Liste Noire Manuelle (Bannissement d'IPs)
+
+```nginx
+    # Bannir les IPs malveillantes
+    deny 195.178.110.160;
+    deny 104.23.221.142;
+    deny 104.23.221.143;
+    deny 35.233.210.231;
+    deny 34.187.212.26;
+    deny 34.11.205.87;
+    deny 136.117.72.223;
+    deny 35.197.17.94;
+    deny 35.185.243.182;
+    deny 34.168.16.43;
+```
+
+C'est une liste noire manuelle. Ces IPs ont été identifiées (probablement via les logs ou fail2ban) comme des attaquants persistants. Le `deny` est plus rapide que fail2ban car il est lu directement par NGINX au démarrage. C'est un complément parfait à la défense automatisée.
+
+### 3.3. Filtrage des Méthodes HTTP
+
+```nginx
+    # Bloquer les méthodes HTTP non autorisées
+    if ($request_method !~ ^(GET|HEAD|POST)$) {
+        return 444;
+    }
+```
+
+Un portfolio statique n'a besoin que de 3 méthodes :
+
+* **GET** : Pour récupérer une page ou un fichier.
+* **HEAD** : Pour vérifier si un fichier existe (utilisé par les caches, les bots).
+* **POST** : Uniquement si vous avez un formulaire de contact.
+
+Toutes les autres méthodes (PUT, DELETE, CONNECT, TRACE...) sont inutiles pour un visiteur et sont à 99% des tentatives d'attaque. On les bloque donc.
+
+> **Pourquoi ?** Un navigateur a seulement besoin de `GET` (voir la page) ou `POST` (envoyer un formulaire). Des méthodes comme `DELETE` ou `PUT` n'ont rien à faire sur un portfolio et sont souvent utilisées par des attaquants.
+
+### 3.4. Blocage de Chemins (Anti-Scan de Vulnérabilités)
+
+```nginx
+    # Bloquer WordPress et scans de vulnérabilités
+    location ~* ^/(wp-|wordpress|cgi-bin) {
+        return 444;
+    }
+    
+    # Bloquer les fichiers sensibles
+    location ~* /(\.env|\.git|config\.php|phpinfo|setup-config) {
+        return 444;
+    }
+    
+    # Bloquer les chemins d'administration suspects
+    location ~* ^/(admin|api/\.env|backend/\.env|_profiler) {
+        return 444;
+    }
+```
+
+C'est l'une des défenses les plus efficaces. 99% du "bruit" des bots sur Internet consiste à scanner des vulnérabilités connues (WordPress, PHP, etc.), même si votre site n'est pas concerné.
+
+* **`location ~* ...`** : Le `~*` signifie "correspondance par expression régulière (`~`), insensible à la casse (`*`)".
+* **`^/(wp-|...)`** : Le `^` signifie "commence par". Bloque tout ce qui commence par `/wp-`.
+* **`(\.env|\.git|...)`** : Le `|` signifie "OU". C'est une mesure critique. Elle bloque l'accès à :
+  * **`/.git/`** : Exposer ce dossier permettrait à quiconque de télécharger tout le code source du site.
+  * **`/.env`** : Exposer ce fichier révélerait tous les secrets (clés d'API, mots de passe).
+
+> **Exemple critique :** Bloquer `/.git/`. Si ce dossier était accidentellement exposé, un attaquant pourrait télécharger tout le code source du site, y compris d'éventuels secrets (clés d'API, etc.).
+
+### 3.5. Le "Mur de Briques" : `return 444`
+
+**Pourquoi 444 et pas 403 Forbidden ?**
+
+* Un **403** est une réponse polie. Le serveur dit "Je te vois, tu n'as pas le droit, voici une page d'erreur". Cela consomme des ressources (CPU, bande passante) pour générer et envoyer cette réponse.
+* Un **`return 444`** est une instruction spécifique à NGINX qui signifie : "Ferme la connexion. Immédiatement. Sans envoyer de réponse."
+
+> **Explication :** Un code `403 Forbidden` dit à l'attaquant "Non, tu n'as pas le droit". Un code `444` lui raccroche au nez sans rien dire. C'est plus efficace pour décourager les scanners.
+
+C'est l'équivalent de raccrocher au nez de l'attaquant. C'est plus rapide, économise les ressources du serveur et déroute les scanners automatisés qui attendent une réponse.
+
+---
+
+## ⚡ Section 4 : Optimisation & Performance (Cache)
+
+Cette section configure le cache côté client pour rendre le site quasi-instantané lors des visites ultérieures. C'est essentiel pour un bon score de performance (Lighthouse, PageSpeed).
+
+### 4.1. Cache Agressif : Images & Polices
+
+```nginx
+    # Cache des images (1 an)
+    location ~* \.(jpg|jpeg|png|gif|ico|svg|webp|avif)$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        access_log off;
+    }
+    
+    # Cache des fonts (1 an)
+    location ~* \.(woff|woff2|ttf|otf|eot)$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        access_log off;
+    }
+```
+
+C'est la stratégie de cache la plus performante.
+
+* **`expires 1y;`** : Dit au navigateur : "Conserve ce fichier pendant 1 an."
+* **`add_header Cache-Control "public, immutable";`** :
+  * **`public`** : Le fichier peut être mis en cache par le navigateur, mais aussi par des proxys intermédiaires ou des CDN.
+  * **`immutable`** : C'est une promesse. On dit au navigateur : "Ce fichier (ex: `logo.png` ou `font.woff2`) ne changera jamais. Fais-moi confiance. Ne viens même pas me redemander s'il est à jour." C'est le cache le plus puissant qui existe.
+* **`access_log off;`** : Une optimisation de performance côté serveur. Inutile d'écrire une ligne dans un fichier log chaque fois qu'un `logo.png` est chargé. Cela réduit drastiquement les écritures disque (I/O), ce qui est crucial sur un VPS.
+
+> **Analogie :** Quand un visiteur charge le site, son navigateur "prend une photo" du logo et des polices. Le serveur lui dit : "Garde ces photos pendant 1 an (`immutable`) et ne me les redemande pas". La prochaine fois qu'il visite, la page se charge instantanément car tout est déjà sur son ordinateur.
+
+> **Pourquoi ?** Garder un journal de chaque fois que `logo.png` est chargé est inutile et consomme des ressources (écritures disque). On ne garde les logs que pour les pages HTML, qui sont bien plus importantes à suivre.
+
+### 4.2. Cache Statique : CSS & JS
+
+```nginx
+    # Cache CSS et JS (6 mois)
+    location ~* \.(css|js)$ {
+        expires 6M;
+        add_header Cache-Control "public";
+    }
+```
+
+On utilise la même logique, mais sans `immutable`.
+
+* **Pourquoi ?** Parce que les fichiers `style.css` ou `app.js` sont susceptibles d'être modifiés lors d'une mise à jour du site.
+* **`Cache-Control "public"`** dit au navigateur de garder une copie, mais de quand même venir vérifier (via un en-tête `If-Modified-Since` ou `ETag`) si une nouvelle version est disponible. Si le fichier n'a pas changé, le serveur répond `304 Not Modified` (très rapide) ; s'il a changé, il envoie la nouvelle version.
+
+---
+
+## 🗂️ Section 5 : Service du Site (Le "Routeur")
+
+Enfin, cette section gère la logique de base pour servir les fichiers du site.
+
+```nginx
+    # Favicon
+    location = /favicon.ico {
+        access_log off;
+        log_not_found off;
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+    
+    # Robots.txt
+    location = /robots.txt {
+        access_log off;
+        log_not_found off;
+        expires 1y;
+        add_header Cache-Control "public";
+    }
+    
+    # Route principale
+    location / {
+        try_files $uri $uri/ =404;
+    }
+}
+```
+
+### Explication
+
+* **`location = /favicon.ico`** : Le `=` indique une correspondance exacte, ce qui est la vérification la plus rapide possible pour NGINX. On applique les mêmes optimisations de cache et de log que pour les autres images.
+
+* **`log_not_found off;`** : Empêche NGINX de remplir les logs d'erreurs si ces fichiers (favicon, robots.txt) n'existent pas. Les navigateurs les demandent toujours automatiquement.
+
+* **`location / { ... }`** : C'est le bloc "attrape-tout" final. Si aucune autre `location` plus spécifique n'a correspondu, celle-ci s'applique.
+
+* **`try_files $uri $uri/ =404;`** : C'est le cœur d'un site statique. NGINX va essayer, dans l'ordre :
+  * **`$uri`** : De trouver un fichier qui correspond exactement à l'URL. (Ex: `/contact.html` → NGINX cherche `/var/www/mon-portfolio/contact.html`).
+  * **`$uri/`** : S'il ne trouve pas de fichier, il regarde si c'est un dossier. (Ex: `/blog/` → NGINX cherche `/var/www/mon-portfolio/blog/index.html`).
+  * **`=404`** : S'il n'a toujours rien trouvé, il renvoie une erreur 404 (Page non trouvée).
 
 ---
 
