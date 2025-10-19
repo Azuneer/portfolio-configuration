@@ -61,3 +61,5 @@ graph LR
     class Grafana viz
     class User user
 ```
+
+Intégration future
