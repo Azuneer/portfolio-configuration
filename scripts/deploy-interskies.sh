@@ -307,55 +307,20 @@ else
 fi
 
 cat > /etc/nginx/sites-available/$DOMAIN << EOF
-# Configuration NGINX - $DOMAIN
+# Configuration NGINX - $DOMAIN (HTTP seulement - avant SSL)
 # Déployé par deploy-interskies.sh
-# Adapté de la configuration ewengadonnaud.xyz
+# SSL sera configuré automatiquement par Certbot
 
-# Redirection HTTP → HTTPS
 server {
     listen 80;
     listen [::]:80;
     server_name $SERVER_NAMES;
 
-    # Location pour le challenge Let's Encrypt
-    location /.well-known/acme-challenge/ {
-        root $WEB_ROOT;
-    }
-
-    # Redirection vers HTTPS
-    location / {
-        return 301 https://\$server_name\$request_uri;
-    }
-}
-
-# Configuration HTTPS principale
-server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
-    server_name $SERVER_NAMES;
-
     root $WEB_ROOT;
     index index.html index.htm;
 
-    # SSL Certificates (seront configurés par Certbot)
-    # ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
-    # ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
-
-    # SSL Configuration
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_prefer_server_ciphers on;
-    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384';
-
     # Cacher la version Nginx
     server_tokens off;
-
-    # HSTS (HTTP Strict Transport Security)
-    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-
-    # Autres headers de sécurité
-    add_header X-Frame-Options "SAMEORIGIN" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header X-XSS-Protection "1; mode=block" always;
 
     # Rate limiting
     limit_req zone=general burst=20 nodelay;
@@ -703,13 +668,139 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
     if [ $? -eq 0 ]; then
         print_success "Certificat SSL généré avec succès"
 
-        # Décommenter les lignes SSL dans la config NGINX
-        sed -i 's/# ssl_certificate/ssl_certificate/g' /etc/nginx/sites-available/$DOMAIN
-        nginx -t && systemctl reload nginx
+        print_warning "Application de la configuration NGINX complète avec sécurité renforcée..."
+
+        # Appliquer la configuration complète avec SSL et toutes les sécurités
+        cat > /etc/nginx/sites-available/$DOMAIN << 'EOFNGINX'
+# Configuration NGINX - interskies.com
+# Déployé par deploy-interskies.sh - Version complète avec SSL
+# Adapté de la configuration ewengadonnaud.xyz
+
+# Redirection HTTP → HTTPS
+server {
+    listen 80;
+    listen [::]:80;
+    server_name SERVER_NAMES_PLACEHOLDER;
+    return 301 https://\$server_name\$request_uri;
+}
+
+# Configuration HTTPS principale
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name SERVER_NAMES_PLACEHOLDER;
+
+    root WEB_ROOT_PLACEHOLDER;
+    index index.html index.htm;
+
+    # SSL Certificates (configurés par Certbot)
+    ssl_certificate /etc/letsencrypt/live/DOMAIN_PLACEHOLDER/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/DOMAIN_PLACEHOLDER/privkey.pem;
+
+    # SSL Configuration
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers on;
+    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384';
+
+    # Cacher la version Nginx
+    server_tokens off;
+
+    # HSTS (HTTP Strict Transport Security)
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+    # Autres headers de sécurité
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+
+    # Rate limiting
+    limit_req zone=general burst=20 nodelay;
+
+    # Bloquer les méthodes HTTP non autorisées
+    if (\$request_method !~ ^(GET|HEAD|POST)\$) {
+        return 444;
+    }
+
+    # Cache des images (1 an)
+    location ~* \.(jpg|jpeg|png|gif|ico|svg|webp|avif)\$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        access_log off;
+    }
+
+    # Cache des fonts (1 an)
+    location ~* \.(woff|woff2|ttf|otf|eot)\$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        access_log off;
+    }
+
+    # Cache CSS et JS (6 mois)
+    location ~* \.(css|js)\$ {
+        expires 6M;
+        add_header Cache-Control "public";
+    }
+
+    # Bloquer WordPress et scans de vulnérabilités
+    location ~* ^/(wp-|wordpress|cgi-bin) {
+        return 444;
+    }
+
+    # Bloquer les fichiers sensibles
+    location ~* /(\.env|\.git|config\.php|phpinfo|setup-config) {
+        return 444;
+    }
+
+    # Bloquer les chemins d'administration suspects
+    location ~* ^/(admin|api/\.env|backend/\.env|_profiler) {
+        return 444;
+    }
+
+    # Favicon
+    location = /favicon.ico {
+        access_log off;
+        log_not_found off;
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+
+    # Robots.txt
+    location = /robots.txt {
+        access_log off;
+        log_not_found off;
+        expires 1y;
+        add_header Cache-Control "public";
+    }
+
+    # Route principale
+    location / {
+        try_files \$uri \$uri/ =404;
+    }
+}
+EOFNGINX
+
+        # Remplacer les placeholders
+        sed -i "s|SERVER_NAMES_PLACEHOLDER|$SERVER_NAMES|g" /etc/nginx/sites-available/$DOMAIN
+        sed -i "s|WEB_ROOT_PLACEHOLDER|$WEB_ROOT|g" /etc/nginx/sites-available/$DOMAIN
+        sed -i "s|DOMAIN_PLACEHOLDER|$DOMAIN|g" /etc/nginx/sites-available/$DOMAIN
+
+        # Tester et recharger
+        if nginx -t; then
+            systemctl reload nginx
+            print_success "Configuration NGINX complète appliquée avec succès"
+        else
+            print_error "Erreur dans la configuration NGINX"
+            print_warning "La configuration Certbot de base reste active"
+        fi
     else
         print_error "Échec de la génération du certificat SSL"
         print_warning "Vous pouvez le faire manuellement plus tard avec:"
-        echo "   certbot --nginx -d $DOMAIN -d www.$DOMAIN"
+        if [[ $INCLUDE_WWW =~ ^[Yy]$ ]]; then
+            echo "   certbot --nginx -d $DOMAIN -d www.$DOMAIN"
+        else
+            echo "   certbot --nginx -d $DOMAIN"
+        fi
     fi
 else
     print_warning "Configuration SSL reportée. Pour générer le certificat plus tard:"
