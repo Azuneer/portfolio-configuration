@@ -48,7 +48,6 @@ print_step "🚀 Script de Déploiement - interskies.com"
 
 echo "Ce script va configurer:"
 echo "  - Système de base (Debian)"
-echo "  - SSH Hardening"
 echo "  - Firewall (UFW)"
 echo "  - NGINX avec configuration sécurisée"
 echo "  - Fail2ban avec toutes les jails"
@@ -75,14 +74,6 @@ read -p "Inclure www.$DOMAIN? (y/n, défaut: y): " -n 1 -r INCLUDE_WWW
 echo
 INCLUDE_WWW=${INCLUDE_WWW:-y}
 
-# Utilisateur système
-read -p "Nom d'utilisateur système pour SSH (défaut: admin): " SYSTEM_USER
-SYSTEM_USER=${SYSTEM_USER:-admin}
-
-# Port SSH personnalisé
-read -p "Port SSH personnalisé (défaut: 2222): " SSH_PORT
-SSH_PORT=${SSH_PORT:-2222}
-
 # Webhook Discord
 read -p "URL du Webhook Discord pour les notifications (optionnel): " DISCORD_WEBHOOK
 
@@ -96,8 +87,6 @@ echo "  - Domaine: $DOMAIN"
 if [[ $INCLUDE_WWW =~ ^[Yy]$ ]]; then
     echo "  - Avec www: Oui (www.$DOMAIN)"
 fi
-echo "  - Utilisateur SSH: $SYSTEM_USER"
-echo "  - Port SSH: $SSH_PORT"
 echo "  - Webhook Discord: ${DISCORD_WEBHOOK:-Non configuré}"
 echo "  - Email Let's Encrypt: $LETSENCRYPT_EMAIL"
 echo ""
@@ -143,81 +132,10 @@ apt-get install -y \
 print_success "Paquets installés"
 
 ################################################################################
-# 3. CRÉATION DE L'UTILISATEUR SYSTÈME
+# 3. CONFIGURATION DU FIREWALL (UFW)
 ################################################################################
 
-print_step "3️⃣  Configuration de l'utilisateur système"
-
-if id "$SYSTEM_USER" &>/dev/null; then
-    print_warning "L'utilisateur $SYSTEM_USER existe déjà"
-else
-    useradd -m -s /bin/bash "$SYSTEM_USER"
-    usermod -aG sudo "$SYSTEM_USER"
-    print_success "Utilisateur $SYSTEM_USER créé et ajouté au groupe sudo"
-fi
-
-# Créer le dossier SSH
-mkdir -p /home/$SYSTEM_USER/.ssh
-chmod 700 /home/$SYSTEM_USER/.ssh
-
-print_warning "⚠ IMPORTANT: Vous devez ajouter votre clé SSH publique dans:"
-print_warning "   /home/$SYSTEM_USER/.ssh/authorized_keys"
-echo ""
-read -p "Voulez-vous le faire maintenant? (y/n) " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-    echo "Collez votre clé SSH publique (Entrée puis Ctrl+D pour terminer):"
-    cat > /home/$SYSTEM_USER/.ssh/authorized_keys
-    chmod 600 /home/$SYSTEM_USER/.ssh/authorized_keys
-    chown -R $SYSTEM_USER:$SYSTEM_USER /home/$SYSTEM_USER/.ssh
-    print_success "Clé SSH ajoutée"
-fi
-
-################################################################################
-# 4. SSH HARDENING
-################################################################################
-
-print_step "4️⃣  Durcissement de la configuration SSH"
-
-# Backup de la config SSH
-cp /etc/ssh/sshd_config /etc/ssh/sshd_config.backup
-
-# Configuration SSH sécurisée
-cat > /etc/ssh/sshd_config << EOF
-# Configuration SSH sécurisée - interskies.com
-# Généré par deploy-interskies.sh
-
-Port $SSH_PORT
-Protocol 2
-
-# Authentification
-PermitRootLogin no
-PubkeyAuthentication yes
-PasswordAuthentication no
-ChallengeResponseAuthentication no
-UsePAM yes
-
-# Sécurité
-X11Forwarding no
-MaxAuthTries 3
-MaxSessions 10
-
-# Autres options
-PrintMotd no
-AcceptEnv LANG LC_*
-
-# Subsystem pour SFTP
-Subsystem sftp /usr/lib/openssh/sftp-server
-EOF
-
-print_success "Configuration SSH durcie"
-print_warning "⚠ Le service SSH sera redémarré plus tard pour éviter de vous déconnecter"
-
-################################################################################
-# 5. CONFIGURATION DU FIREWALL (UFW)
-################################################################################
-
-print_step "5️⃣  Configuration du firewall (UFW)"
+print_step "3️⃣  Configuration du firewall (UFW)"
 
 # Désactiver UFW temporairement pour configuration
 ufw --force disable
@@ -225,9 +143,6 @@ ufw --force disable
 # Configuration par défaut
 ufw default deny incoming
 ufw default allow outgoing
-
-# Autoriser SSH sur le port personnalisé
-ufw allow $SSH_PORT/tcp comment 'SSH'
 
 # Autoriser HTTP et HTTPS
 ufw allow 80/tcp comment 'HTTP'
@@ -239,10 +154,10 @@ ufw --force enable
 print_success "Firewall configuré et activé"
 
 ################################################################################
-# 6. CRÉATION DE L'ARBORESCENCE WEB
+# 4. CRÉATION DE L'ARBORESCENCE WEB
 ################################################################################
 
-print_step "6️⃣  Création de l'arborescence web"
+print_step "4️⃣  Création de l'arborescence web"
 
 WEB_ROOT="/var/www/$DOMAIN"
 mkdir -p $WEB_ROOT
@@ -288,10 +203,10 @@ EOF
 print_success "Arborescence web créée: $WEB_ROOT"
 
 ################################################################################
-# 7. CONFIGURATION NGINX
+# 5. CONFIGURATION NGINX
 ################################################################################
 
-print_step "7️⃣  Configuration NGINX"
+print_step "5️⃣  Configuration NGINX"
 
 # Créer la zone de rate limiting dans nginx.conf
 if ! grep -q "limit_req_zone" /etc/nginx/nginx.conf; then
@@ -400,10 +315,10 @@ nginx -t
 print_success "Configuration NGINX créée et activée"
 
 ################################################################################
-# 8. CONFIGURATION FAIL2BAN
+# 6. CONFIGURATION FAIL2BAN
 ################################################################################
 
-print_step "8️⃣  Configuration Fail2ban"
+print_step "6️⃣  Configuration Fail2ban"
 
 # Créer les fichiers de filtre
 
@@ -451,14 +366,6 @@ maxretry = 5
 destemail = ${LETSENCRYPT_EMAIL}
 sendername = Fail2Ban-$DOMAIN
 action = %(action_)s
-
-# Jail SSH
-[sshd]
-enabled = true
-port = $SSH_PORT
-logpath = %(sshd_log)s
-maxretry = 3
-bantime = 86400
 
 # Jail NGINX - Scans 404
 [nginx-404]
@@ -519,12 +426,12 @@ systemctl enable fail2ban
 print_success "Fail2ban configuré avec toutes les jails"
 
 ################################################################################
-# 9. SCRIPT D'AUTO-UPDATE
+# 7. SCRIPT D'AUTO-UPDATE
 ################################################################################
 
-print_step "9️⃣  Configuration du script d'auto-update"
+print_step "7️⃣  Configuration du script d'auto-update"
 
-SCRIPTS_DIR="/home/$SYSTEM_USER/scripts"
+SCRIPTS_DIR="/root/scripts"
 mkdir -p $SCRIPTS_DIR
 
 cat > $SCRIPTS_DIR/maj_auto.sh << 'EOFSCRIPT'
@@ -611,7 +518,6 @@ exit 0
 EOFSCRIPT
 
 chmod +x $SCRIPTS_DIR/maj_auto.sh
-chown -R $SYSTEM_USER:$SYSTEM_USER $SCRIPTS_DIR
 
 print_success "Script d'auto-update créé: $SCRIPTS_DIR/maj_auto.sh"
 
@@ -635,10 +541,10 @@ else
 fi
 
 ################################################################################
-# 10. REDÉMARRAGE DES SERVICES
+# 8. REDÉMARRAGE DES SERVICES
 ################################################################################
 
-print_step "🔄 Redémarrage des services"
+print_step "8️⃣  Redémarrage des services"
 
 systemctl restart nginx
 print_success "NGINX redémarré"
@@ -647,10 +553,10 @@ systemctl restart fail2ban
 print_success "Fail2ban redémarré"
 
 ################################################################################
-# 11. CONFIGURATION SSL (OPTIONNEL)
+# 9. CONFIGURATION SSL (OPTIONNEL)
 ################################################################################
 
-print_step "🔐 Configuration SSL avec Let's Encrypt"
+print_step "9️⃣  Configuration SSL avec Let's Encrypt"
 
 echo "Le certificat SSL peut être généré maintenant ou plus tard."
 echo "Note: Votre domaine doit pointer vers ce serveur pour que la validation fonctionne."
@@ -812,31 +718,6 @@ else
 fi
 
 ################################################################################
-# 12. REDÉMARRAGE SSH (DERNIÈRE ÉTAPE)
-################################################################################
-
-print_step "⚠️  Redémarrage du service SSH"
-
-print_warning "Le service SSH va maintenant être redémarré avec la nouvelle configuration."
-print_warning "Assurez-vous d'avoir:"
-print_warning "  1. Ajouté votre clé SSH publique"
-print_warning "  2. Noté le nouveau port SSH: $SSH_PORT"
-print_warning "  3. Ouvert une DEUXIÈME session SSH de test AVANT de fermer celle-ci"
-echo ""
-read -p "Redémarrer SSH maintenant? (y/n) " -n 1 -r
-echo
-
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-    systemctl restart sshd
-    print_success "SSH redémarré"
-    print_warning "Testez IMMÉDIATEMENT dans une nouvelle fenêtre:"
-    echo "   ssh -p $SSH_PORT $SYSTEM_USER@$(hostname -I | awk '{print $1}')"
-else
-    print_warning "SSH non redémarré. Pour le faire manuellement:"
-    echo "   systemctl restart sshd"
-fi
-
-################################################################################
 # FIN DU DÉPLOIEMENT
 ################################################################################
 
@@ -855,13 +736,8 @@ echo ""
 echo "📁 Racine web: $WEB_ROOT"
 echo "   Placez vos fichiers HTML/CSS/JS dans ce dossier"
 echo ""
-echo "🔐 SSH:"
-echo "   Port: $SSH_PORT"
-echo "   Utilisateur: $SYSTEM_USER"
-echo "   Connexion: ssh -p $SSH_PORT $SYSTEM_USER@$(hostname -I | awk '{print $1}')"
-echo ""
 echo "🛡️  Sécurité:"
-echo "   - Fail2ban: actif avec 7 jails"
+echo "   - Fail2ban: actif avec 6 jails (NGINX uniquement)"
 echo "   - Firewall UFW: actif"
 echo "   - NGINX: configuré avec WAF et rate limiting"
 echo ""
@@ -872,7 +748,7 @@ echo "   Logs: /var/log/system_update_*.log"
 echo ""
 echo "📊 Commandes utiles:"
 echo "   - Status Fail2ban: fail2ban-client status"
-echo "   - Voir les bans: fail2ban-client status sshd"
+echo "   - Voir les bans: fail2ban-client status nginx-404"
 echo "   - Status NGINX: systemctl status nginx"
 echo "   - Logs NGINX: tail -f /var/log/nginx/access.log"
 echo "   - Test config NGINX: nginx -t"
@@ -888,6 +764,5 @@ echo "======================================================"
 echo ""
 
 print_success "Configuration déployée avec succès pour $DOMAIN !"
-print_warning "⚠ N'oubliez pas de tester la connexion SSH avant de fermer cette session!"
 
 exit 0
