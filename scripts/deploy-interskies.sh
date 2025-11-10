@@ -144,6 +144,9 @@ ufw --force disable
 ufw default deny incoming
 ufw default allow outgoing
 
+# Autoriser SSH (port par défaut 22)
+ufw allow 22/tcp comment 'SSH'
+
 # Autoriser HTTP et HTTPS
 ufw allow 80/tcp comment 'HTTP'
 ufw allow 443/tcp comment 'HTTPS'
